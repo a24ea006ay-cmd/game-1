@@ -21,7 +21,7 @@ function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * d
 const STAGES = [
   {
     name: '月面軌道',
-    tip: '左右にすばやく振って炭酸をためよう!',
+    tip: 'SPACEで水を発射! 左右に振って炭酸をためよう',
     duration: 32, spawnEvery: 1.25, speed: 1.0, hp: 1.0,
     bulletSpeed: 150, fireChance: 0.0, shootEvery: 2.2,
     types: ['straight', 'straight', 'zigzag'],
@@ -39,7 +39,7 @@ const STAGES = [
   },
   {
     name: '星雲基地',
-    tip: '中ボス出現! 炭酸バーストで弾を消せる!',
+    tip: '中ボス出現! 炭酸バースト(B)で弾を消せる!',
     duration: 28, spawnEvery: 0.95, speed: 1.22, hp: 1.4,
     bulletSpeed: 180, fireChance: 0.25, shootEvery: 1.8,
     types: ['straight', 'zigzag', 'formation', 'shooter'],

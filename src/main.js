@@ -4,6 +4,7 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const burstBtn = document.getElementById('burstBtn');
+const shootBtn = document.getElementById('shootBtn');
 const FONT = '"Hiragino Kaku Gothic ProN","Meiryo","Yu Gothic",sans-serif';
 
 function resize() {
@@ -26,13 +27,16 @@ function initAudio() {
 }
 const SFX = {
   // [開始周波数, 長さ, 波形, 音量, 終わりの周波数の倍率]
-  boom:  [140, 0.22, 'sawtooth', 0.06, 0.3],
-  burst: [180, 0.45, 'sawtooth', 0.10, 3.0],
-  ready: [880, 0.18, 'sine', 0.08, 1.6],
-  hurt:  [200, 0.35, 'triangle', 0.14, 0.3],
-  phase: [320, 0.6, 'square', 0.06, 0.5],
-  clear: [660, 0.5, 'sine', 0.10, 1.5],
-  big:   [80, 0.9, 'sawtooth', 0.12, 0.2],
+  boom:   [140, 0.22, 'sawtooth', 0.06, 0.3],
+  burst:  [180, 0.45, 'sawtooth', 0.10, 3.0],
+  ready:  [880, 0.18, 'sine', 0.08, 1.6],
+  hurt:   [200, 0.35, 'triangle', 0.14, 0.3],
+  phase:  [320, 0.6, 'square', 0.06, 0.5],
+  clear:  [660, 0.5, 'sine', 0.10, 1.5],
+  big:    [80, 0.9, 'sawtooth', 0.12, 0.2],
+  select: [600, 0.08, 'square', 0.04, 1.3],
+  step:   [320, 0.07, 'triangle', 0.06, 1.6],
+  deny:   [160, 0.15, 'square', 0.05, 0.8],
 };
 function sfx(name) {
   if (!actx || !SFX[name]) return;
@@ -53,18 +57,42 @@ function sfx(name) {
   } catch (e) { /* 音が出せない環境では無視 */ }
 }
 
-// ===== ハイスコア保存 =====
-function loadHi() {
-  try { return parseInt(localStorage.getItem('petbottle_hi') || '0', 10) || 0; } catch (e) { return 0; }
+// ===== セーブデータ(クリア状況と各ステージのベストスコア) =====
+const SAVE_KEY = 'petbottle_save_v1';
+function loadSave() {
+  const empty = { cleared: STAGES.map(() => false), best: STAGES.map(() => 0) };
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    if (d && Array.isArray(d.cleared) && Array.isArray(d.best)) {
+      return {
+        cleared: STAGES.map((_, i) => !!d.cleared[i]),
+        best: STAGES.map((_, i) => Number(d.best[i]) || 0),
+      };
+    }
+  } catch (e) { /* 読めなければ新規 */ }
+  return empty;
 }
-function saveHi(v) {
-  try { localStorage.setItem('petbottle_hi', String(v)); } catch (e) { /* 保存できなくても続行 */ }
+const save = loadSave();
+function writeSave() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* 保存できなくても続行 */ }
 }
+// 行けるマスの最大番号(0=ホーム, 1〜5=ステージ)。前のステージをクリアすると次が開く
+function unlockedNode() {
+  let n = 1;
+  for (let i = 0; i < STAGES.length - 1; i++) {
+    if (save.cleared[i]) n = i + 2; else break;
+  }
+  return n;
+}
+function clearedCount() { return save.cleared.filter(Boolean).length; }
 
 // ===== 入力(キーボード + タッチ/マウス) =====
 const input = {
-  left: false, right: false, up: false, down: false,
-  burstPressed: false, confirmPressed: false, titlePressed: false, pausePressed: false,
+  left: false, right: false, up: false, down: false, // 押しっぱなし
+  keyShoot: false, touchShoot: false,                // ショット(押している間)
+  nav: { left: false, right: false, up: false, down: false }, // 押した瞬間(メニュー・マップ用)
+  burstPressed: false, confirmPressed: false, backPressed: false, pausePressed: false,
+  tap: null, // タップ/クリックした位置(ゲーム内座標)
   pointer: { active: false, id: null, x: 0, y: 0, ox: 0, oy: 0 },
   touchMode: false,
 };
@@ -76,28 +104,41 @@ const KEYMAP = {
 window.addEventListener('keydown', (e) => {
   initAudio();
   const k = KEYMAP[e.code];
-  if (k) { input[k] = true; e.preventDefault(); }
-  if (e.code === 'Space') {
-    if (!e.repeat) { input.burstPressed = true; input.confirmPressed = true; }
+  if (k) {
+    input[k] = true;
+    if (!e.repeat) input.nav[k] = true;
     e.preventDefault();
   }
-  if (e.code === 'Enter' && !e.repeat) input.confirmPressed = true;
-  if ((e.code === 'KeyP' || e.code === 'Escape') && !e.repeat) input.pausePressed = true;
-  if (e.code === 'KeyT' && !e.repeat) input.titlePressed = true;
+  if (e.code === 'Space') {
+    input.keyShoot = true;
+    if (!e.repeat) input.confirmPressed = true;
+    e.preventDefault();
+  }
+  if (e.repeat) return;
+  if (e.code === 'Enter') input.confirmPressed = true;
+  if (e.code === 'KeyB') input.burstPressed = true;
+  if (e.code === 'KeyP') input.pausePressed = true;
+  if (e.code === 'Escape') { input.pausePressed = true; input.backPressed = true; }
 });
 window.addEventListener('keyup', (e) => {
   const k = KEYMAP[e.code];
   if (k) input[k] = false;
+  if (e.code === 'Space') input.keyShoot = false;
 });
 window.addEventListener('blur', () => {
   input.left = input.right = input.up = input.down = false;
+  input.keyShoot = input.touchShoot = false;
   input.pointer.active = false;
+  if (game.state === 'play' && !game.paused) pauseGame(); // 別の画面に切り替えたら自動で一時停止
 });
 
 function toGamePos(e) {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
 }
+
+// 一時停止ボタン(画面上部中央)
+const PAUSE_BTN = { x: W / 2, y: 26, r: 20 };
 
 canvas.addEventListener('pointerdown', (e) => {
   initAudio();
@@ -106,8 +147,14 @@ canvas.addEventListener('pointerdown', (e) => {
     input.touchMode = true;
     document.body.classList.add('touch');
   }
-  if (game.state !== 'play' || game.paused) { input.confirmPressed = true; return; }
   const p = toGamePos(e);
+  const playing = game.state === 'play' && !game.paused;
+  if (playing && dist2(p.x, p.y, PAUSE_BTN.x, PAUSE_BTN.y) < (PAUSE_BTN.r + 8) ** 2) {
+    input.pausePressed = true;
+    return;
+  }
+  if (!playing) { input.tap = p; return; }
+  // プレイ中はドラッグで移動
   const ptr = input.pointer;
   ptr.active = true;
   ptr.id = e.pointerId;
@@ -128,31 +175,40 @@ function endPointer(e) {
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 
+// スマホ用ボタン
+shootBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  initAudio();
+  input.touchShoot = true;
+  shootBtn.classList.add('on');
+  try { shootBtn.setPointerCapture(e.pointerId); } catch (err) { /* 非対応でも続行 */ }
+});
+function shootOff() { input.touchShoot = false; shootBtn.classList.remove('on'); }
+shootBtn.addEventListener('pointerup', shootOff);
+shootBtn.addEventListener('pointercancel', shootOff);
 burstBtn.addEventListener('pointerdown', (e) => {
   e.preventDefault();
-  e.stopPropagation();
   initAudio();
   input.burstPressed = true;
-  if (game.state !== 'play' || game.paused) input.confirmPressed = true;
 });
 
 function clearPressed() {
   input.burstPressed = false;
   input.confirmPressed = false;
-  input.titlePressed = false;
+  input.backPressed = false;
   input.pausePressed = false;
+  input.nav.left = input.nav.right = input.nav.up = input.nav.down = false;
+  input.tap = null;
 }
 
 // ===== ゲーム全体の状態 =====
 const game = {
-  state: 'title', // title / intro / play / clear / gameover / allclear
+  state: 'title', // title / map / intro / play / clear / gameover / ending
   stateTime: 0,
   time: 0,
   paused: false,
   stageIndex: 0,
   score: 0,
-  stageStartScore: 0,
-  hiScore: loadHi(),
   player: new Player(),
   enemies: [],
   playerShots: [],
@@ -166,7 +222,8 @@ const game = {
   warning: 0,
   clearTimer: -1,
   clearBonus: 0,
-  healed: false,
+  firstClear: false,
+  newBest: false,
   shakeAmt: 0,
   flash: 0,
   banner: null,
@@ -175,10 +232,7 @@ const game = {
 
   shake(v) { this.shakeAmt = Math.max(this.shakeAmt, v); },
 
-  addScore(v) {
-    this.score += v;
-    if (this.score > this.hiScore) this.hiScore = this.score;
-  },
+  addScore(v) { this.score += v; },
 
   fireBurst(x, y) {
     this.bursts.push({ x, y, vy: -760, r: 24, t: 0, hits: new Set(), hitBoss: false });
@@ -215,16 +269,38 @@ const game = {
   },
 };
 
-// ===== 星空の背景 =====
+// ===== 星空 =====
 const stars = [];
 for (let i = 0; i < 130; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, z: Math.random() * 0.8 + 0.2 });
 
-// ===== 状態の切り替え =====
-function toTitle() {
-  game.state = 'title';
+// ===== メニュー(一時停止・クリア・ゲームオーバーで共通) =====
+let menu = null; // { items: [{label, action}], index, y, rects }
+function openMenu(items, y) { menu = { items, index: 0, y, rects: [] }; }
+function runMenuItem(i) {
+  const item = menu.items[i];
+  menu = null;
+  sfx('select');
+  item.action();
+}
+function updateMenu() {
+  if (!menu) return;
+  const n = menu.items.length;
+  if (input.nav.up) { menu.index = (menu.index + n - 1) % n; sfx('select'); }
+  if (input.nav.down) { menu.index = (menu.index + 1) % n; sfx('select'); }
+  if (input.tap) {
+    const p = input.tap;
+    for (let i = 0; i < menu.rects.length; i++) {
+      const r = menu.rects[i];
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) { runMenuItem(i); return; }
+    }
+  }
+  if (input.confirmPressed) runMenuItem(menu.index);
+}
+
+// ===== 画面の切り替え =====
+function setState(s) {
+  game.state = s;
   game.stateTime = 0;
-  saveHi(game.hiScore);
-  clearWorld();
 }
 
 function clearWorld() {
@@ -233,57 +309,188 @@ function clearWorld() {
   game.bursts = [];
   game.enemyBullets = [];
   game.boss = null;
+  game.banner = null;
 }
 
-function startGame() {
-  game.score = 0;
-  game.stageIndex = 0;
-  game.player.hp = game.player.maxHp;
-  startStage();
+function toTitle() {
+  menu = null;
+  game.paused = false;
+  clearWorld();
+  setState('title');
 }
 
-function startStage() {
+// ワールドマップ(ホーム)へ
+function goMap(revealNext) {
+  menu = null;
+  game.paused = false;
   clearWorld();
   game.particles = [];
+  input.pointer.active = false;
+  shootOff();
+  map.walking = false;
+  map.target = map.node;
+  map.reveal = 0;
+  map.revealNode = 0;
+  if (revealNext && map.node + 1 < MAP_NODES.length) {
+    map.reveal = MAP_REVEAL_TIME;
+    map.revealNode = map.node + 1;
+  }
+  setState('map');
+}
+
+function startStage(idx) {
+  menu = null;
+  game.paused = false;
+  game.stageIndex = idx;
+  map.node = map.target = idx + 1; // マップに戻ったときの位置
+  clearWorld();
+  game.particles = [];
+  game.score = 0;
   game.bossSpawned = false;
   game.stageTime = 0;
   game.spawnTimer = 1.5;
   game.warning = 0;
   game.clearTimer = -1;
-  game.stageStartScore = game.score;
+  game.player.hp = game.player.maxHp; // 各ステージは満タンから
   game.player.reset();
-  game.state = 'intro';
-  game.stateTime = 0;
+  setState('intro');
 }
 
-function retryStage() {
-  game.score = game.stageStartScore;
-  game.player.hp = game.player.maxHp;
-  startStage();
+function pauseGame() {
+  game.paused = true;
+  input.pointer.active = false;
+  shootOff();
+  openMenu([
+    { label: 'つづける', action: resumeGame },
+    { label: 'やり直す', action: () => startStage(game.stageIndex) },
+    { label: 'マップへ戻る', action: () => goMap(false) },
+  ], H / 2 - 20);
+}
+function resumeGame() {
+  game.paused = false;
+  menu = null;
 }
 
 function stageClear() {
+  const i = game.stageIndex;
   const p = game.player;
   game.clearBonus = p.hp * 1000;
   game.addScore(game.clearBonus);
-  saveHi(game.hiScore);
+  game.firstClear = !save.cleared[i];
+  game.newBest = game.score > save.best[i];
+  save.cleared[i] = true;
+  if (game.newBest) save.best[i] = game.score;
+  writeSave();
   sfx('clear');
-  game.stateTime = 0;
-  if (game.stageIndex >= STAGES.length - 1) {
-    game.state = 'allclear';
-  } else {
-    game.state = 'clear';
-    game.healed = p.hp < p.maxHp;
-    p.hp = Math.min(p.maxHp, p.hp + 1); // 水分補給
+  shootOff();
+
+  if (i >= STAGES.length - 1) {
+    setState('ending');
+    return;
   }
+  setState('clear');
+  const reveal = game.firstClear;
+  openMenu([
+    { label: '次のステージへ', action: () => startStage(i + 1) },
+    { label: 'マップへ戻る', action: () => goMap(reveal) },
+  ], H / 2 + 50);
 }
 
 function gameOver() {
-  game.state = 'gameover';
-  game.stateTime = 0;
+  setState('gameover');
   game.player.hp = 0;
   game.shake(16);
-  saveHi(game.hiScore);
+  shootOff();
+  openMenu([
+    { label: 'もう一度', action: () => startStage(game.stageIndex) },
+    { label: 'マップへ戻る', action: () => goMap(false) },
+  ], H / 2 + 20);
+}
+
+// ===== ワールドマップ =====
+// 0 = ホーム基地、1〜5 = ステージ
+const MAP_NODES = [
+  { x: 80, y: 500 },
+  { x: 215, y: 455 },
+  { x: 385, y: 390 },
+  { x: 250, y: 305 },
+  { x: 95, y: 220 },
+  { x: 290, y: 135 },
+];
+const MAP_REVEAL_TIME = 1.2;
+const MAP_BTN = { x: 318, y: 620, w: 130, h: 52 };
+const map = { node: 0, target: 0, from: 0, to: 0, walking: false, walkT: 0, reveal: 0, revealNode: 0, msg: null };
+
+function mapNodeAt(p) {
+  for (let i = 0; i < MAP_NODES.length; i++) {
+    const n = MAP_NODES[i];
+    if (dist2(p.x, p.y, n.x, n.y) < 42 * 42) return i;
+  }
+  return -1;
+}
+
+function enterNode() {
+  if (map.node === 0) { sfx('select'); toTitle(); return; }
+  sfx('select');
+  startStage(map.node - 1);
+}
+
+function updateMap(dt) {
+  const maxN = unlockedNode();
+  if (map.reveal > 0) map.reveal = Math.max(0, map.reveal - dt);
+  if (map.msg) { map.msg.t -= dt; if (map.msg.t <= 0) map.msg = null; }
+
+  if (map.walking) {
+    map.walkT += dt / 0.3;
+    if (map.walkT >= 1) {
+      map.walking = false;
+      map.node = map.to;
+      sfx('step');
+    }
+    if (input.backPressed) toTitle();
+    return;
+  }
+
+  // キーで移動(→↑ で先へ、←↓ で戻る)
+  if (input.nav.right || input.nav.up) {
+    if (map.node + 1 <= maxN) map.target = map.node + 1;
+    else if (map.node + 1 < MAP_NODES.length) { map.msg = { text: '前のステージをクリアすると進めるよ', t: 1.6 }; sfx('deny'); }
+  }
+  if (input.nav.left || input.nav.down) map.target = Math.max(0, map.node - 1);
+
+  // タップで移動・出撃
+  if (input.tap) {
+    const p = input.tap;
+    const inBtn = p.x >= MAP_BTN.x && p.x <= MAP_BTN.x + MAP_BTN.w && p.y >= MAP_BTN.y && p.y <= MAP_BTN.y + MAP_BTN.h;
+    const i = mapNodeAt(p);
+    if (inBtn) { enterNode(); return; }
+    if (i >= 0) {
+      if (i > maxN) { map.msg = { text: 'まだ行けない! 前のステージをクリアしよう', t: 1.6 }; sfx('deny'); }
+      else if (i === map.node) { enterNode(); return; }
+      else map.target = i;
+    }
+  }
+
+  if (map.target !== map.node) {
+    map.from = map.node;
+    map.to = map.node + Math.sign(map.target - map.node);
+    map.walkT = 0;
+    map.walking = true;
+    return;
+  }
+
+  if (input.confirmPressed) { enterNode(); return; }
+  if (input.backPressed) toTitle();
+}
+
+function mapPlayerPos() {
+  if (!map.walking) {
+    const n = MAP_NODES[map.node];
+    return { x: n.x, y: n.y, hop: 0 };
+  }
+  const a = MAP_NODES[map.from], b = MAP_NODES[map.to];
+  const t = clamp(map.walkT, 0, 1);
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, hop: Math.sin(t * Math.PI) * 16 };
 }
 
 // ===== 雑魚の出現 =====
@@ -482,46 +689,54 @@ function updateParticles(dt) {
   game.particles = game.particles.filter((pt) => pt.life > 0);
 }
 
+let lastPlaying = false;
+function syncButtons() {
+  const playing = game.state === 'play' && !game.paused;
+  if (playing !== lastPlaying) {
+    document.body.classList.toggle('playing', playing);
+    lastPlaying = playing;
+  }
+}
+
 function update(dt) {
   game.time += dt;
+
+  // 一時停止中は時間を止めてメニューだけ動かす
+  if (game.state === 'play' && game.paused) {
+    if (input.pausePressed) resumeGame();
+    else updateMenu();
+    clearPressed();
+    syncButtons();
+    return;
+  }
+
   const scroll = game.state === 'play' ? 1 : 0.4;
   for (const s of stars) {
     s.y += (30 + s.z * 140) * dt * scroll;
     if (s.y > H) { s.y = 0; s.x = Math.random() * W; }
   }
 
-  if (input.pausePressed && game.state === 'play') game.paused = !game.paused;
-  if (game.paused) {
-    if (input.confirmPressed) game.paused = false;
-    clearPressed();
-    return;
-  }
-
   game.stateTime += dt;
   switch (game.state) {
     case 'title':
-      if (input.confirmPressed) startGame();
+      if (input.confirmPressed || input.tap) { sfx('select'); goMap(false); }
+      break;
+    case 'map':
+      updateMap(dt);
       break;
     case 'intro':
-      if (game.stateTime > 2.4 || (input.confirmPressed && game.stateTime > 0.4)) {
-        game.state = 'play';
-        game.stateTime = 0;
-      }
+      if (game.stateTime > 2.4 || ((input.confirmPressed || input.tap) && game.stateTime > 0.4)) setState('play');
       break;
     case 'play':
-      updatePlay(dt);
+      if (input.pausePressed) pauseGame();
+      else updatePlay(dt);
       break;
     case 'clear':
-      if (game.stateTime > 1.0 && input.confirmPressed) { game.stageIndex++; startStage(); }
-      break;
     case 'gameover':
-      if (game.stateTime > 1.0) {
-        if (input.titlePressed) toTitle();
-        else if (input.confirmPressed) retryStage();
-      }
+      if (game.stateTime > 0.8) updateMenu();
       break;
-    case 'allclear':
-      if (game.stateTime > 2.0 && input.confirmPressed) toTitle();
+    case 'ending':
+      if (game.stateTime > 2.0 && (input.confirmPressed || input.tap)) goMap(false);
       break;
   }
 
@@ -530,9 +745,10 @@ function update(dt) {
   game.flash = Math.max(0, game.flash - dt * 2);
   if (game.banner) { game.banner.t -= dt; if (game.banner.t <= 0) game.banner = null; }
   clearPressed();
+  syncButtons();
 }
 
-// ===== 描画 =====
+// ===== 描画の部品 =====
 function text(str, x, y, size, color, align) {
   ctx.font = `bold ${size}px ${FONT}`;
   ctx.textAlign = align || 'center';
@@ -544,8 +760,45 @@ function text(str, x, y, size, color, align) {
   ctx.fillText(str, x, y);
 }
 
-function drawBackground() {
-  const st = game.state === 'title' ? STAGES[0] : game.stage;
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawStar(x, y, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function dim(a) {
+  ctx.fillStyle = `rgba(0,0,0,${a})`;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawStars(streak) {
+  for (const s of stars) {
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + s.z * 0.7})`;
+    ctx.fillRect(s.x, s.y, s.z * 2.2, s.z * 2.2 + (streak ? s.z * 3 : 0));
+  }
+}
+
+function drawStageBg(st, scrollTime) {
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, st.sky[0]);
   g.addColorStop(1, st.sky[1]);
@@ -554,7 +807,7 @@ function drawBackground() {
 
   // 惑星(ゆっくり流れる)
   const pl = st.planet;
-  const py = ((game.state === 'title' ? game.time : game.stageTime) * 6) % (H + 400) - 200;
+  const py = (scrollTime * 6) % (H + 400) - 200;
   const pg = ctx.createRadialGradient(pl.x - pl.r * 0.3, py - pl.r * 0.3, pl.r * 0.1, pl.x, py, pl.r);
   pg.addColorStop(0, pl.color);
   pg.addColorStop(1, 'rgba(0,0,0,0.9)');
@@ -565,12 +818,204 @@ function drawBackground() {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  for (const s of stars) {
-    ctx.fillStyle = `rgba(255,255,255,${0.3 + s.z * 0.7})`;
-    ctx.fillRect(s.x, s.y, s.z * 2.2, s.z * 2.2 + (game.state === 'play' ? s.z * 3 : 0));
+  drawStars(game.state === 'play' && !game.paused);
+}
+
+function drawMenu() {
+  if (!menu) return;
+  const bw = 250, bh = 44, gap = 56;
+  menu.rects = [];
+  menu.items.forEach((item, i) => {
+    const x = (W - bw) / 2, y = menu.y + i * gap;
+    const sel = i === menu.index;
+    roundRect(x, y, bw, bh, 12);
+    ctx.fillStyle = sel ? '#e8102a' : 'rgba(20,20,50,0.85)';
+    ctx.fill();
+    ctx.lineWidth = sel ? 3 : 1.5;
+    ctx.strokeStyle = sel ? '#ffd3d8' : 'rgba(255,255,255,0.4)';
+    ctx.stroke();
+    text((sel ? '▶ ' : '') + item.label, W / 2, y + bh / 2, 18, '#ffffff');
+    menu.rects.push({ x, y, w: bw, h: bh });
+  });
+  text('↑↓: 選ぶ  SPACE / Enter / タップ: 決定', W / 2, menu.y + menu.items.length * gap + 6, 12, 'rgba(255,255,255,0.7)');
+}
+
+// ===== タイトル =====
+function drawTitle() {
+  const t = game.time;
+  ctx.save();
+  ctx.translate(W / 2, 250 + Math.sin(t * 2) * 8);
+  ctx.rotate(Math.sin(t * 6) * 0.15);
+  ctx.scale(2.6, 2.6);
+  drawBottle(ctx, 0.8, 60 + Math.sin(t) * 40, t, true);
+  ctx.restore();
+
+  text('ペットボトル', W / 2, 90, 40, '#ff3b4f');
+  text('ギャラクシー', W / 2, 138, 40, '#ffffff');
+
+  const lines = [
+    '移動: 矢印キー / WASD (スマホはドラッグ)',
+    'ショット: SPACE を押している間 発射',
+    '左右にすばやく振ると 炭酸ゲージ がたまる',
+    '満タンで B → 炭酸バースト!',
+    '(貫通・敵弾を消す・ボスに大ダメージ)',
+    '一時停止: P / Esc / 画面上の ⏸',
+  ];
+  lines.forEach((l, i) => text(l, W / 2, 410 + i * 26, 14, '#e8e8ff'));
+
+  if (Math.floor(t * 2) % 2 === 0) text('SPACE / タップでスタート', W / 2, 590, 20, '#fff7b0');
+  text(`クリア ${clearedCount()} / ${STAGES.length}`, W / 2, 650, 14, '#ffd34d');
+}
+
+// ===== ワールドマップの描画 =====
+function drawHomeBase(x, y, t) {
+  // 地面
+  ctx.fillStyle = '#2a3a6a';
+  ctx.beginPath(); ctx.ellipse(x, y + 10, 40, 14, 0, 0, Math.PI * 2); ctx.fill();
+  // ドーム
+  const g = ctx.createLinearGradient(x - 26, y - 30, x + 26, y);
+  g.addColorStop(0, 'rgba(180,230,255,0.9)');
+  g.addColorStop(1, 'rgba(60,120,200,0.9)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y + 6, 26, Math.PI, 0); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#dff4ff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // アンテナ
+  ctx.beginPath(); ctx.moveTo(x + 12, y - 16); ctx.lineTo(x + 20, y - 34); ctx.stroke();
+  ctx.fillStyle = Math.floor(t * 3) % 2 ? '#ff3b4f' : '#ffe15a';
+  ctx.beginPath(); ctx.arc(x + 20, y - 34, 3.5, 0, Math.PI * 2); ctx.fill();
+  text('HOME', x, y + 36, 13, '#bde6ff');
+}
+
+function drawMap() {
+  const t = game.time;
+  const maxN = unlockedNode();
+
+  // 背景
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0420');
+  g.addColorStop(1, '#06203a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  drawStars(false);
+
+  // 道
+  ctx.lineCap = 'round';
+  for (let i = 0; i < MAP_NODES.length - 1; i++) {
+    const a = MAP_NODES[i], b = MAP_NODES[i + 1];
+    const open = i + 1 <= maxN;
+    let prog = 1;
+    if (open && map.reveal > 0 && i + 1 === map.revealNode) prog = clamp(1 - map.reveal / MAP_REVEAL_TIME, 0, 1);
+    ctx.setLineDash([2, 12]);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    if (open) {
+      ctx.strokeStyle = '#ffe15a';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(a.x + (b.x - a.x) * prog, a.y + (b.y - a.y) * prog); ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+
+  // マス(惑星)
+  MAP_NODES.forEach((n, i) => {
+    if (i === 0) { drawHomeBase(n.x, n.y, t); return; }
+    const st = STAGES[i - 1];
+    const revealing = map.reveal > 0 && i === map.revealNode;
+    const locked = i > maxN || revealing;
+    const r = st.boss === 'big' ? 34 : st.boss === 'mid' ? 30 : 24;
+
+    // 選べるマスは光る
+    if (!locked) {
+      ctx.fillStyle = `rgba(255,240,150,${0.12 + Math.sin(t * 3 + i) * 0.06})`;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r + 10, 0, Math.PI * 2); ctx.fill();
+    }
+    const pg = ctx.createRadialGradient(n.x - r * 0.3, n.y - r * 0.3, r * 0.1, n.x, n.y, r);
+    pg.addColorStop(0, locked ? '#777788' : '#ffffff');
+    pg.addColorStop(0.35, locked ? '#555566' : st.planet.color);
+    pg.addColorStop(1, locked ? '#222230' : '#1a1030');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.8)';
+    ctx.stroke();
+
+    text(locked ? '?' : String(i), n.x, n.y, r * 0.9, locked ? '#aaaaaa' : '#ffffff');
+    if (st.boss) text(st.boss === 'big' ? '大ボス' : '中ボス', n.x, n.y - r - 10, 12, locked ? '#888' : '#ff5a6e');
+    text(st.name, n.x, n.y + r + 14, 12, locked ? '#777' : '#e8e8ff');
+    if (save.cleared[i - 1]) drawStar(n.x + r * 0.8, n.y - r * 0.75, 9, '#ffe15a');
+  });
+
+  // 新しく道が開いた演出
+  if (map.reveal > 0) {
+    const n = MAP_NODES[map.revealNode];
+    text('NEW!', n.x, n.y - 52 - (1 - map.reveal / MAP_REVEAL_TIME) * 10, 18, '#fff7b0');
+  } else if (map.revealNode && map.revealNode <= maxN && game.stateTime < MAP_REVEAL_TIME + 1.5) {
+    const n = MAP_NODES[map.revealNode];
+    if (Math.floor(t * 4) % 2 === 0) text('NEW!', n.x, n.y - 62, 18, '#fff7b0');
+  }
+
+  // ペットボトル(プレイヤー)
+  const pos = mapPlayerPos();
+  ctx.save();
+  ctx.translate(pos.x, pos.y - 30 - pos.hop + Math.sin(t * 3) * 2);
+  ctx.rotate(map.walking ? Math.sin(t * 25) * 0.2 : Math.sin(t * 2) * 0.06);
+  ctx.scale(0.85, 0.85);
+  drawBottle(ctx, 1, 30, t, false);
+  ctx.restore();
+
+  // 上の見出し
+  text('ワールドマップ', W / 2, 30, 24, '#ffffff');
+  text(`クリア ${clearedCount()} / ${STAGES.length}`, W / 2, 58, 14, '#ffe15a');
+
+  // 下の情報パネル
+  roundRect(16, 560, W - 32, 146, 16);
+  ctx.fillStyle = 'rgba(10,10,35,0.88)';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.stroke();
+
+  const showNode = map.walking ? map.to : map.node;
+  if (showNode === 0) {
+    text('ホーム基地', 34, 590, 20, '#bde6ff', 'left');
+    text('ここから冒険に出発しよう', 34, 622, 14, '#e8e8ff', 'left');
+    text('→ キーで ステージ1 へ', 34, 648, 14, '#e8e8ff', 'left');
+  } else {
+    const st = STAGES[showNode - 1];
+    text(`STAGE ${showNode}  ${st.name}`, 34, 590, 20, '#ffffff', 'left');
+    const bossTxt = st.boss === 'big' ? '大ボス出現' : st.boss === 'mid' ? '中ボス出現' : '通常ステージ';
+    text(bossTxt, 34, 620, 14, st.boss ? '#ff5a6e' : '#bde6ff', 'left');
+    if (save.cleared[showNode - 1]) {
+      drawStar(42, 648, 8, '#ffe15a');
+      text(`クリア済み  BEST ${save.best[showNode - 1]}`, 56, 648, 14, '#ffe15a', 'left');
+    } else {
+      text('未クリア', 34, 648, 14, '#aaaaaa', 'left');
+    }
+  }
+
+  // 出撃ボタン
+  const b = MAP_BTN;
+  roundRect(b.x, b.y, b.w, b.h, 12);
+  ctx.fillStyle = showNode === 0 ? '#3a5a9a' : '#e8102a';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  text(showNode === 0 ? 'タイトルへ' : '出撃!', b.x + b.w / 2, b.y + b.h / 2, showNode === 0 ? 16 : 20, '#ffffff');
+
+  text('←→: 移動   SPACE: 決定   Esc: タイトル', W / 2, 690, 12, 'rgba(255,255,255,0.65)');
+
+  if (map.msg) {
+    roundRect(40, 500 - 100, W - 80, 40, 10);
+    ctx.fillStyle = 'rgba(120,0,20,0.9)';
+    ctx.fill();
+    text(map.msg.text, W / 2, 420, 14, '#ffffff');
   }
 }
 
+// ===== ステージ中の描画 =====
 function drawWorld() {
   const t = game.time;
 
@@ -601,7 +1046,7 @@ function drawWorld() {
   }
 
   // 自機
-  if (game.player.hp > 0 && game.state !== 'allclear') game.player.draw(ctx, t);
+  if (game.player.hp > 0 && game.state !== 'ending') game.player.draw(ctx, t);
 
   // 敵弾
   for (const eb of game.enemyBullets) {
@@ -629,7 +1074,7 @@ function drawWorld() {
 function drawHUD() {
   const p = game.player;
   text(`SCORE ${game.score}`, 14, 20, 16, '#ffffff', 'left');
-  text(`HI ${game.hiScore}`, 14, 42, 12, '#ffd34d', 'left');
+  text(`BEST ${save.best[game.stageIndex]}`, 14, 42, 12, '#ffd34d', 'left');
   text(`STAGE ${game.stageIndex + 1}/${STAGES.length}`, W - 14, 20, 16, '#ffffff', 'right');
 
   // HP(水のしずく)
@@ -641,6 +1086,19 @@ function drawHUD() {
     ctx.quadraticCurveTo(x + 8, y + 1, x, y + 7);
     ctx.quadraticCurveTo(x - 8, y + 1, x, y - 9);
     ctx.fill();
+  }
+
+  // 一時停止ボタン
+  if (game.state === 'play' && !game.paused) {
+    const b = PAUSE_BTN;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(b.x - 7, b.y - 8, 5, 16);
+    ctx.fillRect(b.x + 2, b.y - 8, 5, 16);
   }
 
   // 炭酸ゲージ
@@ -659,7 +1117,7 @@ function drawHUD() {
   ctx.strokeRect(gx, gy, gw, gh);
   if (full) {
     if (Math.floor(game.time * 4) % 2 === 0) {
-      text(input.touchMode ? '炭酸MAX! ボタンで発射!' : '炭酸MAX! SPACEで発射!', gx + gw + 10, gy + gh / 2, 13, '#fff7b0', 'left');
+      text(input.touchMode ? '炭酸MAX! ボタンで発射!' : '炭酸MAX! B で発射!', gx + gw + 10, gy + gh / 2, 13, '#fff7b0', 'left');
     }
   } else {
     text('← 左右に振ってチャージ →', gx + gw + 10, gy + gh / 2, 11, 'rgba(255,255,255,0.65)', 'left');
@@ -677,43 +1135,11 @@ function drawHUD() {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1;
     ctx.strokeRect(bx, by, bw, 8);
-    // 段階の区切り線
     for (let i = 1; i < b.maxPhase; i++) {
       const x = bx + bw * i / b.maxPhase;
       ctx.beginPath(); ctx.moveTo(x, by); ctx.lineTo(x, by + 8); ctx.stroke();
     }
   }
-}
-
-function dim(a) {
-  ctx.fillStyle = `rgba(0,0,0,${a})`;
-  ctx.fillRect(0, 0, W, H);
-}
-
-function drawTitle() {
-  const t = game.time;
-  ctx.save();
-  ctx.translate(W / 2, 250 + Math.sin(t * 2) * 8);
-  ctx.rotate(Math.sin(t * 6) * 0.15);
-  ctx.scale(2.6, 2.6);
-  drawBottle(ctx, 0.8, 60 + Math.sin(t) * 40, t, true);
-  ctx.restore();
-
-  text('ペットボトル', W / 2, 90, 40, '#ff3b4f');
-  text('ギャラクシー', W / 2, 138, 40, '#ffffff');
-
-  const lines = [
-    '移動: 矢印キー / WASD (スマホはドラッグ)',
-    'ショット: 自動で水を発射',
-    '左右にすばやく振ると 炭酸ゲージ がたまる',
-    '満タンで SPACE → 炭酸バースト!',
-    '(貫通・敵弾を消す・ボスに大ダメージ)',
-    'P: 一時停止',
-  ];
-  lines.forEach((l, i) => text(l, W / 2, 410 + i * 26, 14, '#e8e8ff'));
-
-  if (Math.floor(t * 2) % 2 === 0) text('SPACE / タップでスタート', W / 2, 590, 20, '#fff7b0');
-  text(`HI SCORE ${game.hiScore}`, W / 2, 650, 14, '#ffd34d');
 }
 
 function drawOverlays() {
@@ -728,7 +1154,7 @@ function drawOverlays() {
     text(st.tip, W / 2, H / 2 + 74, 14, '#e8e8ff');
   }
 
-  if (game.warning > 0 && game.state === 'play') {
+  if (game.warning > 0 && game.state === 'play' && !game.paused) {
     if (Math.floor(t * 4) % 2 === 0) {
       ctx.fillStyle = 'rgba(255,0,40,0.25)';
       ctx.fillRect(0, H / 2 - 60, W, 120);
@@ -737,60 +1163,64 @@ function drawOverlays() {
     }
   }
 
-  if (game.banner && game.state === 'play') {
+  if (game.banner && game.state === 'play' && !game.paused) {
     text(game.banner.text, W / 2, H / 2 - 20, 36, '#ff5a6e');
     text(game.banner.sub, W / 2, H / 2 + 18, 16, '#ffffff');
   }
 
   if (game.state === 'clear') {
-    dim(0.5);
-    text('STAGE CLEAR!', W / 2, H / 2 - 70, 40, '#fff7b0');
-    text(`残り水分ボーナス +${game.clearBonus}`, W / 2, H / 2 - 15, 18, '#ffffff');
-    if (game.healed) text('水分補給! HP +1', W / 2, H / 2 + 18, 16, '#ff8a96');
-    if (game.stateTime > 1.0 && Math.floor(t * 2) % 2 === 0) text('SPACE / タップで次のステージへ', W / 2, H / 2 + 70, 16, '#e8e8ff');
+    dim(0.55);
+    text('STAGE CLEAR!', W / 2, H / 2 - 110, 40, '#fff7b0');
+    text(`SCORE ${game.score}`, W / 2, H / 2 - 60, 22, '#ffffff');
+    text(`(残り水分ボーナス +${game.clearBonus})`, W / 2, H / 2 - 32, 14, '#e8e8ff');
+    if (game.newBest) text('ベストスコア更新!', W / 2, H / 2 - 6, 16, '#ffd34d');
+    if (game.firstClear) text(`STAGE ${game.stageIndex + 2} への道が開いた!`, W / 2, H / 2 + 20, 15, '#ff8a96');
   }
 
   if (game.state === 'gameover') {
     dim(0.6);
-    text('GAME OVER', W / 2, H / 2 - 60, 44, '#ff3b4f');
-    text('ボトルが空っぽになった…', W / 2, H / 2 - 14, 16, '#ffffff');
-    if (game.stateTime > 1.0) {
-      text('SPACE / タップ: このステージから再挑戦', W / 2, H / 2 + 36, 15, '#fff7b0');
-      text('T: タイトルへ', W / 2, H / 2 + 64, 14, '#e8e8ff');
-    }
+    text('GAME OVER', W / 2, H / 2 - 80, 44, '#ff3b4f');
+    text('ボトルが空っぽになった…', W / 2, H / 2 - 34, 16, '#ffffff');
   }
 
-  if (game.state === 'allclear') {
+  if (game.state === 'ending') {
     dim(0.55);
     text('ALL CLEAR!!', W / 2, H / 2 - 90, 46, '#fff7b0');
     text('宇宙の平和は赤いペットボトルが守った!', W / 2, H / 2 - 40, 16, '#ffffff');
     text(`SCORE ${game.score}`, W / 2, H / 2 + 6, 24, '#ffffff');
-    text(`HI SCORE ${game.hiScore}`, W / 2, H / 2 + 40, 16, '#ffd34d');
-    if (game.stateTime > 2.0 && Math.floor(t * 2) % 2 === 0) text('SPACE / タップでタイトルへ', W / 2, H / 2 + 96, 16, '#e8e8ff');
+    if (game.newBest) text('ベストスコア更新!', W / 2, H / 2 + 40, 16, '#ffd34d');
+    if (game.stateTime > 2.0 && Math.floor(t * 2) % 2 === 0) text('SPACE / タップでマップへ', W / 2, H / 2 + 96, 16, '#e8e8ff');
   }
 
   if (game.paused) {
-    dim(0.5);
-    text('PAUSE', W / 2, H / 2 - 20, 40, '#ffffff');
-    text('P / タップで再開', W / 2, H / 2 + 24, 16, '#e8e8ff');
+    dim(0.55);
+    text('PAUSE', W / 2, H / 2 - 80, 40, '#ffffff');
+  }
+
+  if ((game.state === 'clear' || game.state === 'gameover') && game.stateTime <= 0.8) return;
+  drawMenu();
+}
+
+function render() {
+  if (game.state === 'title') {
+    drawStageBg(STAGES[0], game.time);
+    drawTitle();
+  } else if (game.state === 'map') {
+    drawMap();
+  } else {
+    ctx.save();
+    if (game.shakeAmt > 0 && !game.paused) ctx.translate(rand(-game.shakeAmt, game.shakeAmt), rand(-game.shakeAmt, game.shakeAmt));
+    drawStageBg(game.stage, game.stageTime);
+    drawWorld();
+    ctx.restore();
+    drawHUD();
+    drawOverlays();
   }
 
   if (game.flash > 0) {
     ctx.fillStyle = `rgba(255,255,255,${game.flash * 0.5})`;
     ctx.fillRect(0, 0, W, H);
   }
-}
-
-function render() {
-  ctx.save();
-  if (game.shakeAmt > 0) ctx.translate(rand(-game.shakeAmt, game.shakeAmt), rand(-game.shakeAmt, game.shakeAmt));
-  drawBackground();
-  if (game.state === 'title') drawTitle();
-  else drawWorld();
-  ctx.restore();
-
-  if (game.state !== 'title') drawHUD();
-  drawOverlays();
 }
 
 // ===== メインループ =====

@@ -188,9 +188,9 @@ class Player {
     this.shakeFx = Math.max(0, this.shakeFx - dt);
     this.inv = Math.max(0, this.inv - dt);
 
-    // 通常ショット(水滴)は自動連射
+    // 通常ショット(水滴): SPACE / ショットボタンを押している間だけ連射
     this.fireCd -= dt;
-    if (this.fireCd <= 0) {
+    if ((input.keyShoot || input.touchShoot) && this.fireCd <= 0) {
       game.playerShots.push({ x: this.x - 5, y: this.y - 32, vy: -640, r: 4 });
       game.playerShots.push({ x: this.x + 5, y: this.y - 32, vy: -640, r: 4 });
       this.fireCd = 0.13;
