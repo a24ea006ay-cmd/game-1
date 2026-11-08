@@ -8,6 +8,12 @@
 
 `src/index.html` をダブルクリックしてブラウザで開くだけ(インストール不要)。
 
+### スマホで遊ぶ(GitHub Pages)
+
+リポジトリ直下の `index.html` がゲーム(`src/index.html`)へ案内する入口になっている。
+GitHub の Settings → Pages で「Deploy from a branch」→ `main` / `/(root)` を選んで公開すると、
+`https://a24ea006ay-cmd.github.io/game-1/` をスマホのブラウザで開くだけで遊べる。
+
 ### 遊び方
 
 | 操作 | キーボード | スマホ |
