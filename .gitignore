@@ -1,0 +1,16 @@
+# OS / editor
+Thumbs.db
+.DS_Store
+desktop.ini
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
+
+# Build / deps
+node_modules/
+dist/
+build/
+*.log
