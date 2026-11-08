@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>ペットボトル・ギャラクシー</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game" width="480" height="720"></canvas>
+    <button id="burstBtn" type="button">炭酸<br>バースト</button>
+  </div>
+  <!-- 読み込み順に意味があります(共通設定 → 自機 → 敵 → 本体) -->
+  <script src="stages.js"></script>
+  <script src="player.js"></script>
+  <script src="enemies.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
